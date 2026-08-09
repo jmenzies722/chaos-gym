@@ -2,8 +2,10 @@
 
 Breaks a Kubernetes cluster on a schedule so Josh can practice diagnosing real
 failures against real dashboards. Solo learning project — not shipped for other
-users. Runs entirely on a local `kind` cluster by design, so the practice loop
-costs nothing and nothing paid gets destroyed by a scheduler bug.
+users. Runs on a single small EC2 instance running k3s (not managed EKS — its
+~$73/mo control-plane fee buys HA nothing solo practice needs). Real AWS IAM,
+VPC, and security groups; cheap, not free — see Never below for the cost guardrail
+that has to exist before the instance does.
 
 ## Commands
 
@@ -12,7 +14,8 @@ costs nothing and nothing paid gets destroyed by a scheduler bug.
 pip install -e .
 
 # dev
-kind create cluster --name chaos-gym
+# terraform apply (from terraform/) once it exists — provisions the EC2 box and
+# installs k3s via user-data.
 
 # test
 pytest
@@ -29,41 +32,43 @@ command, because it gets run.
 
 - `src/chaos_gym/` — the chaos scheduler and anything using the Kubernetes Python
   client. Empty stub right now.
-- `terraform/` — not created yet. Manages the `kind` cluster and its Helm releases
-  (Prometheus/Grafana, Chaos Mesh) with **local state** — no remote backend, this
-  is solo and free-tier by design.
+- `terraform/` — not created yet. First resource in here, before anything else:
+  the AWS Budget alarm. Then the EC2 instance, its VPC/subnet/security group, and
+  its IAM instance role. Local state — this project never needs multi-person state
+  locking.
 - `k8s/` — not created yet. Raw manifests for the fake fleet of services that gets
-  broken on purpose.
+  broken on purpose, applied to the k3s cluster running on the EC2 box.
 
 ## Architecture
 
-Nothing built yet. Phase 1 scope: a `kind` cluster running ~15-20 pods across a
-handful of fake services, `kube-prometheus-stack` for dashboards, and one scheduled
-job that kills a random pod. Done means Josh can look at Grafana and correctly name
-what broke, without being told.
+Nothing built yet. Phase 1 scope: one EC2 instance running k3s, ~15-20 pods across
+a handful of fake services, `kube-prometheus-stack` for dashboards, and one
+scheduled job that kills a random pod. Done means Josh can look at Grafana and
+correctly name what broke, without being told.
 
 ## Conventions
 
 - `ruff` for lint and format, `pytest` for tests.
 - Terraform with local state, not remote — this project never needs multi-person
   state locking.
-- Kubernetes RBAC and NetworkPolicy stand in for IAM and security groups. That's a
-  deliberate substitution, not a shortcut — see `DECISIONS.md` for why once it's
-  written.
+- k3s, not managed EKS. The instance's IAM role and security group are the real
+  IAM/networking practice — no RBAC-as-substitute needed once this is real AWS.
 
 ## Never
 
-- Never provision or point anything at a paid cloud resource without discussing
-  the cost and setting a hard budget alarm first. This project's whole design
-  point is running at $0 on a local cluster — any move off that is a real decision,
-  not a default.
-- Never target a cluster other than the local `kind` cluster for chaos actions.
+- Never create the EC2 instance (or any billable resource) before the AWS Budget
+  alarm exists. The alarm is phase 1, step 1 — everything billable comes after it,
+  not before.
+- Never provision anything beyond what phase 1 actually needs — one instance, one
+  cheap instance type. No second instance, no NAT gateway, no load balancer,
+  without discussing the cost first; those are the line items that turn "cheap"
+  into a surprise bill.
 - Never edit `DECISIONS.md`. That file is Josh's, always, even when it would be
   faster for Claude to fill it in.
 - Never generate a complete file for a piece Josh hasn't asked for yet — smallest
   piece that moves the current phase forward, then stop.
 - Never commit secrets or real credentials to any file.
-- Never run a destructive command (`terraform destroy`, deleting the cluster,
+- Never run a destructive command (`terraform destroy`, terminating the instance,
   force-pushing) without asking first.
 
 ## How to work with me

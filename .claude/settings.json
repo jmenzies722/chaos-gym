@@ -12,7 +12,8 @@
       "Bash(git push:*)",
       "Bash(terraform apply:*)",
       "Bash(terraform destroy:*)",
-      "Bash(kind delete cluster:*)",
+      "Bash(aws ec2 terminate-instances:*)",
+      "Bash(aws ec2 run-instances:*)",
       "Bash(kubectl delete:*)"
     ],
     "allow": [
@@ -20,7 +21,8 @@
       "Bash(ruff:*)",
       "Bash(terraform plan:*)",
       "Bash(terraform fmt:*)",
-      "Bash(kind create cluster:*)",
+      "Bash(aws budgets:*)",
+      "Bash(aws sts get-caller-identity:*)",
       "Bash(kubectl get:*)",
       "Bash(kubectl describe:*)",
       "Bash(kubectl logs:*)"

@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./**/*.pem)",
+      "Read(./**/*.key)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)"
+    ],
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(terraform apply:*)",
+      "Bash(terraform destroy:*)",
+      "Bash(kind delete cluster:*)",
+      "Bash(kubectl delete:*)"
+    ],
+    "allow": [
+      "Bash(pytest:*)",
+      "Bash(ruff:*)",
+      "Bash(terraform plan:*)",
+      "Bash(terraform fmt:*)",
+      "Bash(kind create cluster:*)",
+      "Bash(kubectl get:*)",
+      "Bash(kubectl describe:*)",
+      "Bash(kubectl logs:*)"
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+
+# terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl
+
+CLAUDE.local.md

@@ -1,11 +1,21 @@
 # Chaos Gym
 
 Breaks a Kubernetes cluster on a schedule so Josh can practice diagnosing real
-failures against real dashboards. Solo learning project — not shipped for other
+failures against real dashboards, while learning the stack Datadog-style
+platform-engineering roles actually run: Go services, OpenTelemetry, and
+distributed-systems failure modes. Solo learning project — not shipped for other
 users. Runs on a single small EC2 instance running k3s (not managed EKS — its
 ~$73/mo control-plane fee buys HA nothing solo practice needs). Real AWS IAM,
 VPC, and security groups; cheap, not free — see Never below for the cost guardrail
 that has to exist before the instance does.
+
+**2026-08-10 respec:** phase 1 target is now a real Go HTTP service (not generic
+fake pods), instrumented with OpenTelemetry and shipping traces/metrics through an
+OTel Collector into Prometheus/Grafana. The chaos scheduler that kills it stays
+Python — both languages stay in the project on purpose. Postgres/Redis and the
+rest of the failure-mode menu (latency injection, bad rollout, DB slowdown,
+telemetry overload) are deferred to phase 2, so phase 1 doesn't try to teach five
+new things at once.
 
 ## Commands
 
@@ -30,29 +40,69 @@ command, because it gets run.
 
 ## Layout
 
-- `src/chaos_gym/` — the chaos scheduler and anything using the Kubernetes Python
-  client. Empty stub right now.
+- `src/chaos_gym/` — the Python chaos scheduler (the thing doing the killing) and
+  anything using the Kubernetes Python client. Empty stub right now.
+- `app/` — not created yet. The Go HTTP service that gets broken on purpose,
+  instrumented with OpenTelemetry.
 - `terraform/` — not created yet. First resource in here, before anything else:
   the AWS Budget alarm. Then the EC2 instance, its VPC/subnet/security group, and
   its IAM instance role. Local state — this project never needs multi-person state
   locking.
-- `k8s/` — not created yet. Raw manifests for the fake fleet of services that gets
-  broken on purpose, applied to the k3s cluster running on the EC2 box.
+- `k8s/` — not created yet. Manifests for the Go service, the OTel Collector
+  (agent+gateway), and `kube-prometheus-stack`, applied to the k3s cluster running
+  on the EC2 box.
 
 ## Architecture
 
-Nothing built yet. Phase 1 scope: one EC2 instance running k3s, ~15-20 pods across
-a handful of fake services, `kube-prometheus-stack` for dashboards, and one
-scheduled job that kills a random pod. Done means Josh can look at Grafana and
-correctly name what broke, without being told.
+Built backwards from the done-state, then read forward as the build order: **Josh
+can look at Grafana, correctly name what broke without being told, and explain how
+a trace/metric got from the Go service to the dashboard.** Each step below only
+exists because the step after it needs it.
+
+1. AWS Budget alarm (Terraform) — nothing billable exists before this can watch
+   it. **Done:** applied 2026-08-11, `chaos-gym-monthly`, $20/month, alerts to
+   Josh's email at 80% actual / 100% forecasted.
+2. VPC, subnet, security group (Terraform) — the network the instance lives in.
+   **Done:** applied 2026-08-11. Public subnet in `us-east-1a`, IGW + route
+   table for outbound internet, security group with zero inbound rules — SSM
+   only, no SSH port open.
+3. EC2 instance + IAM instance role (Terraform); k3s installed via user-data.
+   **In progress.** IAM role + instance profile (`AmazonSSMManagedInstanceCore`)
+   applied and working — SSM reached the box with zero inbound ports open. The
+   `t3.micro` first attempt was destroyed 2026-08-11: `CPUCreditBalance` sat at
+   0 through the k3s install, throttling it so hard that SSM commands queued
+   instead of running. `instance_type` is now `t3.small`; re-apply to rebuild.
+   **Stop the instance between sessions** — `t3.small` running 24/7 (~$20/mo)
+   does not fit the $20 budget; stopped it is ~$1.60/mo.
+   Also add an AWS Budget Action on `chaos-gym-monthly`: auto-**stop** (never
+   terminate) this instance if actual spend hits 100%, scoped to this instance
+   only by tag. Stop preserves the EBS volume/work; only possible once the
+   instance exists to target.
+4. Go HTTP service — minimal, containerized, deployable.
+5. OpenTelemetry SDK instrumentation in the Go service — traces and metrics.
+6. k8s manifests: deploy the Go service and the OTel Collector (agent) to k3s.
+7. OTel Collector gateway config + `kube-prometheus-stack` (OTLP receiver +
+   Grafana) deployed to k3s.
+8. Python chaos scheduler — kills the Go service's pod on a schedule.
+9. Verification: Josh reads Grafana, names the failure, and traces the telemetry
+   path (Go service → Collector agent → Collector gateway → Prometheus → Grafana)
+   unprompted. This is what "done" in the paragraph above actually means.
+
+Phase 2 (not yet scoped in detail): Postgres/Redis behind the Go service, load
+testing, and the rest of the failure-mode menu (latency injection, bad rollout,
+DB slowdown, telemetry overload), ending in a written incident report.
 
 ## Conventions
 
-- `ruff` for lint and format, `pytest` for tests.
+- `ruff` for lint/format and `pytest` for tests on the Python side; `gofmt`/`go vet`
+  and the standard `testing` package on the Go side.
 - Terraform with local state, not remote — this project never needs multi-person
   state locking.
 - k3s, not managed EKS. The instance's IAM role and security group are the real
   IAM/networking practice — no RBAC-as-substitute needed once this is real AWS.
+- OpenTelemetry Collector, not a vendor-specific agent — the whole point of this
+  phase is learning the vendor-neutral OTLP pipeline (instrumentation → Collector
+  → backend), not a Datadog Agent shortcut.
 
 ## Never
 
@@ -63,6 +113,9 @@ correctly name what broke, without being told.
   cheap instance type. No second instance, no NAT gateway, no load balancer,
   without discussing the cost first; those are the line items that turn "cheap"
   into a surprise bill.
+- Never add Postgres/Redis or the wider failure-mode menu until phase 1 (Go
+  service + OTel Collector + one failure mode) actually works end to end — that's
+  phase 2 scope, not phase 1.
 - Never edit `DECISIONS.md`. That file is Josh's, always, even when it would be
   faster for Claude to fill it in.
 - Never generate a complete file for a piece Josh hasn't asked for yet — smallest

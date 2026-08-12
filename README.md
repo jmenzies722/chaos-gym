@@ -235,4 +235,3 @@ aws ec2 stop-instances --instance-ids <instance-id>
   monitoring stack, Grafana dashboard, PodMonitors, chaos scheduler and its RBAC
 - `deploy.sh` — applies all of it; run at session start to refresh the ECR token
 - `QUESTIONS.md` — comprehension questions captured while building, reviewed per phase
-- `DECISIONS.md` — why things were chosen, in my own words

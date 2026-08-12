@@ -59,7 +59,11 @@ data:
 
     exporters:
       debug:
-        verbosity: detailed
+        # `basic` logs a one-line count per batch instead of every span in full.
+        # detailed was right while proving the pipeline worked and is pure waste
+        # now that Grafana shows the same data — it wrote every span to the
+        # container log twice, once per Collector.
+        verbosity: basic
 
       # Prometheus normally scrapes. Here it is written to instead, over the
       # same OTLP the rest of this pipeline speaks, which is why the chart runs

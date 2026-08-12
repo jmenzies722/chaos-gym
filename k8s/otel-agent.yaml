@@ -46,7 +46,11 @@ data:
       # lists, so the same span goes to both — which is what makes it possible
       # to see what the agent received *and* what survived the gateway's filter.
       debug:
-        verbosity: detailed
+        # `basic` logs a one-line count per batch instead of every span in full.
+        # detailed was right while proving the pipeline worked and is pure waste
+        # now that Grafana shows the same data — it wrote every span to the
+        # container log twice, once per Collector.
+        verbosity: basic
 
     service:
       # The Collector's own metrics — how many spans it took in, sent on, or

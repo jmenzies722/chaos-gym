@@ -47,9 +47,8 @@ aws ssm send-command --instance-ids i-02d3195a106ce38fd \
   --parameters 'commands=["k3s kubectl -n observability get secret kube-prometheus-stack-grafana -o jsonpath={.data.admin-password} | base64 -d"]'
 ```
 
-Nothing beyond lint/test is wired up yet — this is a fresh repo. Don't add a
-command here until it actually runs; a command that doesn't work is worse than no
-command, because it gets run.
+Don't add a command here until it actually runs; a command that doesn't work is
+worse than no command, because it gets run.
 
 ## Layout
 
@@ -59,12 +58,14 @@ command, because it gets run.
   objects so a field rename breaks them, and cover the safety rules; the delete
   path is verified against the real cluster instead of a fake API server.
 - `app/` — the Go HTTP service that gets broken on purpose. `main.go`,
-  `main_test.go`, and a two-stage `Dockerfile` (build on `golang`, run on
-  `scratch`). OpenTelemetry instrumentation not added yet.
-- `terraform/` — not created yet. First resource in here, before anything else:
-  the AWS Budget alarm. Then the EC2 instance, its VPC/subnet/security group, and
-  its IAM instance role. Local state — this project never needs multi-person state
-  locking.
+  `telemetry.go` (OTel tracer provider and exporter choice), `fault.go`
+  (runtime latency injection), and a two-stage `Dockerfile` (build on `golang`,
+  run on `scratch`).
+- `terraform/` — budget alarm and budget action, VPC/subnet/security group, EC2
+  instance and its IAM role, two ECR repositories. Local state — this project
+  never needs multi-person state locking. The budget alarm is deliberately the
+  first resource in the file: nothing billable exists before something watches
+  the bill.
 - `k8s/` — `app.yaml` (Go app), `loadgen.yaml` (1 req/s so the graphs are never
   empty), `otel-agent.yaml` (DaemonSet), `otel-gateway.yaml` (Deployment +
   Service + spanmetrics), `monitoring.yaml` (kube-prometheus-stack via k3s
@@ -247,8 +248,12 @@ DB slowdown, telemetry overload), ending in a written incident report.
 - Never add Postgres/Redis or the wider failure-mode menu until phase 1 (Go
   service + OTel Collector + one failure mode) actually works end to end — that's
   phase 2 scope, not phase 1.
-- Never edit `DECISIONS.md`. That file is Josh's, always, even when it would be
-  faster for Claude to fill it in.
+- Never write the phase writeup for Josh. `DECISIONS.md` was deleted on
+  2026-08-12 as redundant — every "why" already lives in this file, written by
+  Claude, and an empty template was a promise the repo did not keep. The
+  reflection it was meant to force now happens in the per-phase written post,
+  which is public, on the graduation checklist, and the thing an employer
+  actually reads. That post is Josh's, always.
 - Never generate a complete file for a piece Josh hasn't asked for yet — smallest
   piece that moves the current phase forward, then stop.
 - Never commit secrets or real credentials to any file.
@@ -295,5 +300,5 @@ DB slowdown, telemetry overload), ending in a written incident report.
 
 ## References
 
-See @README.md for setup and @DECISIONS.md for the record of what was decided and
-why, in my own words.
+See @README.md for setup and @QUESTIONS.md for the comprehension questions
+captured while building, reviewed at the end of each phase.

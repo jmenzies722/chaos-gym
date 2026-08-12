@@ -8,6 +8,7 @@ underneath. Leaving one open is a legitimate outcome — it says which part of t
 stack to go back to.
 
 ## Open
+- [ ] 2026-08-12 — Which one, and why does being wrong make the others lie rather than just being one more broken panel?
 
 - [ ] 2026-08-11 — The agent currently has one exporter, `debug`. When the gateway is added, spans need to reach Prometheus and still be visible locally. Given the Collector's `receivers → processors → exporters` shape, how many exporters can one pipeline have, and where should the `/healthz` filter go so it applies once rather than per-exporter?
 

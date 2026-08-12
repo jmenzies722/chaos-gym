@@ -1,10 +1,11 @@
 # Evidence captured while building, so the portfolio entry is made of measured
 # facts instead of remembered ones. Claude appends to `phases` and `evidence`.
 #
-# Claude does not write narrative here. Why anything was chosen lives in
-# DECISIONS.md, in Josh's words — a portfolio page whose reasoning was written
-# by the assistant is a page about the assistant. Every `evidence` item must
-# name the command that produced it, or it does not belong in this file.
+# Claude does not write narrative here. Claims are measurements; the reasoning
+# belongs in the per-phase written post, in Josh's words — a portfolio page
+# whose reasoning was written by the assistant is a page about the assistant.
+# Every `evidence` item must name the command that produced it, or it does not
+# belong in this file.
 
 slug: chaos-gym
 name: Chaos Gym

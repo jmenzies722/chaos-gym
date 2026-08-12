@@ -61,9 +61,14 @@ spec:
       resources:
         requests:
           cpu: 50m
-          memory: 128Mi
-        limits:
           memory: 256Mi
+        # Was 256Mi, and Grafana 13 was OOMKilled by it (exit 137) roughly half
+        # an hour after starting — it builds in-memory bleve search indexes
+        # after boot, so the steady state is well above what it needs at
+        # startup. A limit that only fits the first ten minutes is worse than no
+        # limit: it produces a crash loop that looks like an application bug.
+        limits:
+          memory: 512Mi
       # NodePort binds port 30300 on the instance's own interfaces. That is not
       # the same as exposing it: the security group still has zero inbound
       # rules, so nothing on the internet can reach 30300. Access is an SSM

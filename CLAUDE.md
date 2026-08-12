@@ -246,6 +246,13 @@ DB slowdown, telemetry overload), ending in a written incident report.
   in the UI does not. This is also the fastest way to clear a login lockout —
   `kubectl -n observability rollout restart deployment/kube-prometheus-stack-grafana`
   re-seeds the admin user from the Secret.
+- **Grafana was OOMKilled at a 256Mi limit** (exit 137 = 128+SIGKILL) about 30
+  minutes after starting, not at boot: it builds in-memory bleve search indexes
+  after startup, so steady-state usage is well above startup usage. Raised to
+  512Mi. The signature to recognise — the previous container's log ends
+  mid-normal-operation with no error, because SIGKILL leaves no time to log.
+  A log that ends with an error means a crash; a log that just stops means
+  something killed it.
 - **Grafana login blocks after 5 failed attempts** for 5 minutes. The usual
   cause is a browser autofilling an email address into the username field; the
   log then says `no user found: user not found`, which reads like a password

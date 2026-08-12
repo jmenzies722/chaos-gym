@@ -16,7 +16,7 @@ repo: https://github.com/jmenzies722/chaos-gym
 # public repo, README with architecture diagram, working demo, one written post
 # per phase. Until then this project does not render in the site's Shipped
 # section, because the section filters on exactly this field.
-availability: private
+availability: public
 
 summary: >-
   A Kubernetes cluster that breaks itself on a schedule, so incident diagnosis

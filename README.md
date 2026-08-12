@@ -340,6 +340,11 @@ Then read it from the dashboard before checking the logs. That's the exercise:
 If non-2xx is *not* flat, that's the interesting case: something was accepted
 and then dropped.
 
+**[docs/reading-the-signals.md](docs/reading-the-signals.md)** is the full
+reference — every panel's healthy value, the distinct signature of each failure
+mode, where every log lives, and how to get from an anomaly on a graph to the
+log that explains it.
+
 **Stop the box when you're done.** The scheduler only fires while it's running.
 
 ```bash
@@ -357,6 +362,7 @@ aws ec2 stop-instances --instance-ids "$INSTANCE_ID"
 | `terraform/` | Budget guardrails, VPC, instance, IAM, ECR. Local state |
 | `k8s/` | Every manifest: app, load generator, Collector agent and gateway, monitoring stack, dashboard, RBAC |
 | `deploy.sh` | Renders and applies all of it; run at session start |
+| `docs/` | [Reading the signals](docs/reading-the-signals.md) — how to interpret the dashboard and find the logs |
 | `QUESTIONS.md` | Comprehension questions captured while building, reviewed per phase |
 
 ## Known limitations

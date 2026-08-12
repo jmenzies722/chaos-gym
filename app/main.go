@@ -101,7 +101,7 @@ func main() {
 // handleHealthz is what the Kubernetes liveness probe calls. It answers for
 // this process only — it must never check a database or a downstream service,
 // or one slow dependency causes k8s to restart every healthy pod behind it.
-func handleHealthz(w http.ResponseWriter, r *http.Request) {
+func handleHealthz( w http.ResponseWriter,r *http.Request )   {
 	w.WriteHeader(http.StatusOK)
 }
 

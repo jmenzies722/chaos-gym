@@ -24,9 +24,14 @@ new things at once.
 # PEP 668 externally-managed and `pip install -e .` into it is refused.
 python3 -m venv .venv && .venv/bin/pip install -e . pytest
 
-# dev
-# terraform apply (from terraform/) once it exists — provisions the EC2 box and
-# installs k3s via user-data.
+# dev — provision AWS (budget alarm first, then network, instance, ECR).
+# k3s installs itself via user-data on first boot.
+terraform -chdir=terraform apply
+
+# deploy to the cluster (also refreshes the 12h ECR pull secret)
+aws ssm send-command --instance-ids i-02d3195a106ce38fd \
+  --document-name AWS-RunShellScript \
+  --parameters 'commands=["bash /opt/chaos-gym/deploy.sh"]'
 
 # test
 .venv/bin/python -m pytest
@@ -117,12 +122,16 @@ exists because the step after it needs it.
    the caller's trace ID with `Parent.Remote: true`). Exporter choice lives in
    one function — stdout when `OTEL_EXPORTER_OTLP_ENDPOINT` is unset, OTLP gRPC
    when it is set. Tracer provider is shut down *after* `srv.Shutdown` so the
-   batcher flushes spans from the requests a pod kill interrupted. **Metrics
-   not done yet.**
+   batcher flushes spans from the requests a pod kill interrupted.
+   **No metrics SDK in the service, and it may never need one** — the gateway's
+   spanmetrics connector derives RED metrics from these spans instead. Add the
+   SDK only when something needs measuring that is not a request.
 6. k8s manifests: deploy the Go service and the OTel Collector (agent) to k3s.
    **Done:** `k8s/otel-agent.yaml` — a DaemonSet in the `observability`
-   namespace, OTLP on 4317/4318 via `hostPort`, batch processor, `debug`
-   exporter. The app finds it through the downward API (`status.hostIP`), not
+   namespace, OTLP on 4317/4318 via `hostPort`, batch processor, forwarding to
+   the gateway with a `debug` exporter alongside it (a pipeline fans out to
+   every exporter it lists). The app finds it through the downward API
+   (`status.hostIP`), not
    `localhost` — a DaemonSet is a *separate pod* with its own network
    namespace, so `localhost` would be the app's own loopback. `hostPort` rather
    than a Service because a Service would load-balance across nodes and defeat

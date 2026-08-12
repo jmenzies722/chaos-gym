@@ -146,7 +146,7 @@ data:
         {
           "type": "timeseries",
           "title": "Non-2xx responses",
-          "description": "Flat at zero is the expected state. A blip here during a kill means a request was accepted and then lost — which is what the SIGTERM drain exists to prevent.",
+          "description": "Flat at zero is the expected state. A blip here during a kill means a request was accepted and then lost — which is what the SIGTERM drain exists to prevent. The `or vector(0)` matters: without it PromQL returns an empty result when there are no errors at all, and the panel reads 'No data' — indistinguishable from a broken query. A health panel must be able to say zero.",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": {
@@ -159,8 +159,8 @@ data:
           "targets": [
             {
               "refId": "A",
-              "legendFormat": "{{http_response_status_code}}",
-              "expr": "sum by (http_response_status_code) (rate(traces_span_metrics_calls_total{service_name=\"chaos-app\", http_response_status_code!~\"2..\"}[1m]))"
+              "legendFormat": "non-2xx",
+              "expr": "sum(rate(traces_span_metrics_calls_total{service_name=\"chaos-app\", http_response_status_code!~\"2..\"}[1m])) or vector(0)"
             }
           ]
         },

@@ -1,0 +1,101 @@
+# Prometheus + Grafana, installed through k3s's own helm-controller rather than
+# a local `helm` binary. Applying a HelmChart object makes k3s run the install
+# in-cluster — the same mechanism that installed Traefik on this node — so the
+# install is declarative and re-applying is idempotent.
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: kube-prometheus-stack
+  namespace: kube-system
+spec:
+  repo: https://prometheus-community.github.io/helm-charts
+  chart: kube-prometheus-stack
+  # Pinned, not floating. An unpinned chart means the cluster you rebuild in
+  # three months is not the cluster you debugged today.
+  version: "88.3.0"
+  targetNamespace: observability
+  createNamespace: false
+  valuesContent: |-
+    # Nothing pages anyone on this cluster, and Alertmanager is ~100MB of RSS
+    # to deliver alerts to nobody. Alerting is a phase 2 concern.
+    alertmanager:
+      enabled: false
+
+    prometheus:
+      prometheusSpec:
+        # Accept OTLP writes directly, so the Collector gateway can push metrics
+        # in the same protocol it already speaks. Without this flag the endpoint
+        # /api/v1/otlp/v1/metrics returns 404 and the gateway logs export errors.
+        additionalArgs:
+          - name: web.enable-otlp-receiver
+        # Three days is plenty for "what did the chaos run do last night" and
+        # keeps the on-disk index small on a 20GB root volume.
+        retention: 3d
+        resources:
+          requests:
+            cpu: 100m
+            memory: 400Mi
+          limits:
+            memory: 900Mi
+        # A real volume rather than the chart's default emptyDir. The whole
+        # point of this project is killing pods; metrics that vanish when
+        # Prometheus itself restarts would erase the evidence of the incident.
+        storageSpec:
+          volumeClaimTemplate:
+            spec:
+              storageClassName: local-path
+              accessModes: ["ReadWriteOnce"]
+              resources:
+                requests:
+                  storage: 5Gi
+        # Watch every namespace, not just the ones carrying the chart's release
+        # label. Without this, ServiceMonitors written by hand are ignored and
+        # the symptom is a dashboard that is simply empty.
+        serviceMonitorSelectorNilUsesHelmValues: false
+        podMonitorSelectorNilUsesHelmValues: false
+
+    grafana:
+      # No password is set here on purpose. The chart generates one into a
+      # Secret; it is read out with kubectl when needed. A password written into
+      # a manifest is a password committed to git.
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          memory: 256Mi
+      # NodePort binds port 30300 on the instance's own interfaces. That is not
+      # the same as exposing it: the security group still has zero inbound
+      # rules, so nothing on the internet can reach 30300. Access is an SSM
+      # port-forward, which tunnels over the agent's outbound connection and is
+      # authorised by IAM. A LoadBalancer here would mean a public ELB and a
+      # monthly bill; kubectl port-forward would mean a process that has to stay
+      # alive on the node.
+      service:
+        type: NodePort
+        nodePort: 30300
+
+    # Node-level and object-level metrics. Both are small and both are the
+    # difference between "the pod died" and "the pod died because the node
+    # was out of memory".
+    nodeExporter:
+      enabled: true
+    kube-state-metrics:
+      resources:
+        requests:
+          cpu: 10m
+          memory: 64Mi
+        limits:
+          memory: 128Mi
+
+    # k3s runs these as part of the server process, not as separate pods, so
+    # the chart's scrape targets for them point at nothing and would sit
+    # permanently red in the targets page.
+    kubeControllerManager:
+      enabled: false
+    kubeScheduler:
+      enabled: false
+    kubeProxy:
+      enabled: false
+    kubeEtcd:
+      enabled: false

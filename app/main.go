@@ -10,6 +10,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // shutdownGrace is how long in-flight requests get to finish after SIGTERM.
@@ -23,14 +25,29 @@ func main() {
 		log.Fatalf("invalid WORK_DURATION: %v", err)
 	}
 
+	tp, err := newTracerProvider(context.Background())
+	if err != nil {
+		log.Fatalf("tracing setup: %v", err)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.HandleFunc("GET /work", handleWork(workDuration))
 
+	// One span per inbound request, created before routing happens. The name
+	// formatter uses the path because r.Pattern is not populated yet out here;
+	// that is safe only because every path this service serves is fixed. A
+	// path with an ID in it would blow up span cardinality.
+	handler := otelhttp.NewHandler(mux, "",
+		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
+			return r.Method + " " + r.URL.Path
+		}),
+	)
+
 	addr := ":" + envOr("PORT", "8080")
 	srv := &http.Server{
 		Addr:         addr,
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
@@ -57,6 +74,14 @@ func main() {
 	// to finish. It does not cancel them.
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Fatalf("drain failed, forcing exit: %v", err)
+	}
+
+	// Server first, tracing second. The batcher is still holding spans from
+	// the requests that just finished draining; shutting it down first would
+	// throw away telemetry for exactly the requests a pod kill interrupts —
+	// the ones this project exists to look at.
+	if err := tp.Shutdown(shutdownCtx); err != nil {
+		log.Printf("flushing traces: %v", err)
 	}
 	log.Print("drained cleanly")
 }

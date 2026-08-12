@@ -1,0 +1,47 @@
+# One request per second against /work, forever.
+#
+# This is not load testing — that is phase 2 and involves concurrency and
+# measured saturation. This is the baseline signal: with no traffic at all,
+# every panel on the dashboard reads zero, a pod kill changes nothing visible,
+# and there is nothing to diagnose. A steady trickle is what makes the chaos
+# event legible.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loadgen
+  labels:
+    app: loadgen
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: loadgen
+  template:
+    metadata:
+      labels:
+        app: loadgen
+    spec:
+      containers:
+        - name: curl
+          image: curlimages/curl:8.19.0
+          # Deliberately sequential and slow. A tight loop would put the
+          # service under load, and then a latency spike during a kill could
+          # not be distinguished from a latency spike caused by the generator.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              while true; do
+                curl -s -o /dev/null --max-time 5 http://chaos-app/work || true
+                sleep 1
+              done
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

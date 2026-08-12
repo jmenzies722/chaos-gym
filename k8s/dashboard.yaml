@@ -1,0 +1,253 @@
+# The dashboard, as code.
+#
+# kube-prometheus-stack runs a sidecar next to Grafana that watches for
+# ConfigMaps labelled `grafana_dashboard: "1"` and loads their contents. That
+# is why this is a file in git rather than something clicked together in the
+# UI: a hand-built dashboard lives only in Grafana's own database, and this
+# project deliberately kills pods — including, eventually, that one.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chaos-gym-dashboard
+  namespace: observability
+  labels:
+    grafana_dashboard: "1"
+data:
+  chaos-gym.json: |
+    {
+      "uid": "chaos-gym",
+      "title": "Chaos Gym — service health",
+      "tags": ["chaos-gym"],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "10s",
+      "time": { "from": "now-1h", "to": "now" },
+      "panels": [
+        {
+          "type": "stat",
+          "title": "Running replicas",
+          "description": "Drops to 1 the moment the chaos scheduler kills a pod, then returns to 2. If this ever hits 0 the safety rule failed.",
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "orange", "value": 1 },
+                  { "color": "green", "value": 2 }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(kube_pod_status_phase{namespace=\"default\", pod=~\"chaos-app-.*\", phase=\"Running\"})"
+            }
+          ]
+        },
+        {
+          "type": "stat",
+          "title": "Requests / sec",
+          "description": "Derived from spans by the Collector's spanmetrics connector, not from a metrics SDK in the service.",
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": { "unit": "reqps", "decimals": 2 },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(rate(traces_span_metrics_calls_total{service_name=\"chaos-app\"}[5m]))"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Pod lifecycle — each line is one pod",
+          "description": "A line ending is a pod dying. A new line starting is the ReplicaSet replacing it. This is the chaos event, seen directly.",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "max": 1.2,
+              "min": 0,
+              "custom": { "fillOpacity": 20, "lineWidth": 2, "showPoints": "never" }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "legendFormat": "{{pod}}",
+              "expr": "kube_pod_status_phase{namespace=\"default\", pod=~\"chaos-app-.*\", phase=\"Running\"} > 0"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Request rate by endpoint",
+          "description": "/healthz is absent on purpose — probe spans are dropped by the filter processor in the Collector gateway.",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "custom": { "fillOpacity": 10, "lineWidth": 2, "showPoints": "never" }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "legendFormat": "{{span_name}}",
+              "expr": "sum by (span_name) (rate(traces_span_metrics_calls_total{service_name=\"chaos-app\"}[1m]))"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Latency — p50 / p95 / p99",
+          "description": "Computed from the spanmetrics histogram. WORK_DURATION is 100ms, so a healthy p50 sits just above that; a spike means requests caught mid-drain.",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "custom": { "fillOpacity": 0, "lineWidth": 2, "showPoints": "never" }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "legendFormat": "p50",
+              "expr": "histogram_quantile(0.50, sum by (le) (rate(traces_span_metrics_duration_milliseconds_bucket{service_name=\"chaos-app\"}[5m])))"
+            },
+            {
+              "refId": "B",
+              "legendFormat": "p95",
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(traces_span_metrics_duration_milliseconds_bucket{service_name=\"chaos-app\"}[5m])))"
+            },
+            {
+              "refId": "C",
+              "legendFormat": "p99",
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(traces_span_metrics_duration_milliseconds_bucket{service_name=\"chaos-app\"}[5m])))"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Non-2xx responses",
+          "description": "Flat at zero is the expected state. A blip here during a kill means a request was accepted and then lost — which is what the SIGTERM drain exists to prevent.",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "custom": { "fillOpacity": 30, "lineWidth": 2, "showPoints": "never" }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "legendFormat": "{{http_response_status_code}}",
+              "expr": "sum by (http_response_status_code) (rate(traces_span_metrics_calls_total{service_name=\"chaos-app\", http_response_status_code!~\"2..\"}[1m]))"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Pipeline throughput — spans in vs out",
+          "description": "Is the telemetry pipeline itself working? The agent accepts spans from the app and sends them to the gateway; the gateway accepts them and sends metrics onward. If these lines diverge or fall to zero while the app is still serving traffic, the dashboard above is lying by omission.",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": { "fillOpacity": 0, "lineWidth": 2, "showPoints": "never" }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "legendFormat": "accepted — {{job}}",
+              "expr": "sum by (job) (rate(otelcol_receiver_accepted_spans[1m]))"
+            },
+            {
+              "refId": "B",
+              "legendFormat": "sent — {{job}}",
+              "expr": "sum by (job) (rate(otelcol_exporter_sent_spans[1m]))"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "Pipeline loss — refused, failed, queued",
+          "description": "Anything above zero means telemetry is being dropped. Refused = the Collector pushed back; failed = it could not send; queue size climbing = the backend is slower than the incoming rate, which ends in drops.",
+          "gridPos": { "h": 8, "w": 6, "x": 12, "y": 20 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": { "fillOpacity": 30, "lineWidth": 2, "showPoints": "never" }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "legendFormat": "refused — {{job}}",
+              "expr": "sum by (job) (rate(otelcol_receiver_refused_spans[1m]))"
+            },
+            {
+              "refId": "B",
+              "legendFormat": "failed — {{job}}",
+              "expr": "sum by (job) (rate(otelcol_receiver_failed_spans[1m]))"
+            },
+            {
+              "refId": "C",
+              "legendFormat": "queue — {{job}}",
+              "expr": "sum by (job) (otelcol_exporter_queue_size)"
+            }
+          ]
+        },
+        {
+          "type": "stat",
+          "title": "Data age (seconds)",
+          "description": "How long since the newest app metric arrived. It sawtooths between roughly 0 and 15s — that is the spanmetrics flush interval, so the number resets every time a batch lands. Climbing past that without resetting means the pipeline has stopped and every graph above is frozen, not calm.",
+          "gridPos": { "h": 8, "w": 6, "x": 18, "y": 20 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "orange", "value": 90 },
+                  { "color": "red", "value": 180 }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "time() - max(timestamp(traces_span_metrics_calls_total{service_name=\"chaos-app\"}))"
+            }
+          ]
+        }
+      ]
+    }

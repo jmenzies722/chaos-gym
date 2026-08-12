@@ -1,0 +1,161 @@
+# The Collector gateway: one deployment for the whole cluster, reached through
+# a normal Service. This is where cluster-wide decisions live — what to drop,
+# what to sample, which backend to write to — so changing any of them is one
+# config change here instead of an edit to every node's agent.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-gateway
+  namespace: observability
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+
+    processors:
+      # Liveness and readiness probes hit /healthz every 5-10s per pod, forever.
+      # At idle they outnumber real requests roughly ten to one, and they are
+      # all identical and all successful — pure cost, no signal.
+      #
+      # This lives in the gateway rather than the agent on purpose: it is a
+      # decision about the whole cluster, so it belongs in the one place every
+      # span passes through. Putting it in the agent would mean N copies of the
+      # same rule, and N chances for one node to disagree with the others.
+      filter/probes:
+        error_mode: ignore
+        traces:
+          span:
+            - 'attributes["url.path"] == "/healthz"'
+
+      batch:
+        timeout: 5s
+
+    # A connector is an exporter on one pipeline and a receiver on the next —
+    # the seam that lets one signal produce another. spanmetrics counts spans
+    # and times them, emitting request rate, error rate, and duration. That is
+    # the RED method, derived from traces the service already sends, which is
+    # why there is a dashboard before the Go service has a metrics SDK at all.
+    connectors:
+      spanmetrics:
+        histogram:
+          # Buckets are the resolution of every latency number on the dashboard,
+          # and a boundary sitting exactly on the typical latency is the worst
+          # possible place for one. WORK_DURATION is 100ms, so requests land at
+          # ~101ms; with a boundary at 100ms they all fell into the 100→250
+          # bucket and p95 interpolated to 242ms for a service that was
+          # perfectly healthy. The extra buckets between 100ms and 250ms exist
+          # to make the normal case measurable rather than merely bounded.
+          explicit:
+            buckets: [5ms, 10ms, 25ms, 50ms, 75ms, 90ms, 110ms, 130ms, 160ms, 200ms, 250ms, 500ms, 1s, 2s]
+        # Every dimension multiplies the number of time series stored. Method
+        # and status code are bounded and worth it; a raw URL path would not be.
+        dimensions:
+          - name: http.request.method
+          - name: http.response.status_code
+        metrics_flush_interval: 15s
+
+    exporters:
+      debug:
+        verbosity: detailed
+
+      # Prometheus normally scrapes. Here it is written to instead, over the
+      # same OTLP the rest of this pipeline speaks, which is why the chart runs
+      # with --web.enable-otlp-receiver. Push suits a Collector that already
+      # holds the data; scraping would mean exposing yet another endpoint.
+      otlphttp/prometheus:
+        metrics_endpoint: http://kube-prometheus-stack-prometheus.observability.svc.cluster.local:9090/api/v1/otlp/v1/metrics
+
+    service:
+      # Same self-telemetry as the agent. On the gateway these numbers matter
+      # more: it is the single point every span passes through, so if it starts
+      # refusing or failing to export, everything downstream goes quiet at once.
+      telemetry:
+        metrics:
+          level: detailed
+          readers:
+            - pull:
+                exporter:
+                  prometheus:
+                    host: 0.0.0.0
+                    port: 8888
+
+      pipelines:
+        traces:
+          receivers: [otlp]
+          # Order matters: filter before batch, so dropped spans never occupy
+          # space in a batch that then has to be sent. Probes are dropped before
+          # spanmetrics too, so they never inflate the request-rate graph.
+          processors: [filter/probes, batch]
+          exporters: [debug, spanmetrics]
+
+        metrics:
+          receivers: [spanmetrics]
+          processors: [batch]
+          exporters: [otlphttp/prometheus]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-gateway
+  namespace: observability
+  labels:
+    app: otel-gateway
+spec:
+  # One replica: this is a single-node learning cluster, and a second replica
+  # would contend for the same 4GiB the app, Prometheus, and Grafana share.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-gateway
+  template:
+    metadata:
+      labels:
+        app: otel-gateway
+    spec:
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:0.158.0
+          args: ["--config=/conf/config.yaml"]
+          ports:
+            # No hostPort here, unlike the agent. The gateway is reached by
+            # Service DNS from anywhere in the cluster, which is exactly the
+            # load-balancing behaviour that would have been wrong for a
+            # per-node agent and is right for a shared one.
+            - name: otlp-grpc
+              containerPort: 4317
+            - name: metrics
+              containerPort: 8888
+          volumeMounts:
+            - name: config
+              mountPath: /conf
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 384Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: config
+          configMap:
+            name: otel-gateway
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-gateway
+  namespace: observability
+spec:
+  selector:
+    app: otel-gateway
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: otlp-grpc

@@ -26,13 +26,28 @@ spec:
         - name: ecr-creds
       containers:
         - name: app
-          image: 755484097925.dkr.ecr.us-east-1.amazonaws.com/chaos-gym-app:v1
+          image: 755484097925.dkr.ecr.us-east-1.amazonaws.com/chaos-gym-app:v2
           ports:
             - name: http
               containerPort: 8080
           env:
             - name: WORK_DURATION
               value: "100ms"
+            # The downward API: Kubernetes injects facts about the pod's own
+            # placement that the image cannot know at build time. The Collector
+            # agent is a DaemonSet on this node's IP, and which node this pod
+            # lands on is the scheduler's decision, not ours.
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            # $(HOST_IP) resolves because HOST_IP is declared above it —
+            # Kubernetes substitutes earlier entries in this list only, so
+            # order here is load-bearing rather than cosmetic.
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://$(HOST_IP):4317"
+            - name: OTEL_SERVICE_NAME
+              value: chaos-app
           # Readiness gates traffic; liveness restarts the container. They hit
           # the same endpoint here but mean different things, and conflating
           # them is how a slow-starting app gets restart-looped forever.

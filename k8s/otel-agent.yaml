@@ -1,0 +1,125 @@
+# The Collector agent: one instance per node, receiving OTLP from whatever
+# happens to be running on that node. It is deliberately dumb at this stage —
+# receive, batch, print. The gateway in step 7 is where routing to a backend
+# happens.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-agent
+  namespace: observability
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          # 0.0.0.0 rather than localhost because the sender is in a different
+          # pod, so the connection arrives on the pod network interface, not
+          # loopback. Binding to localhost is the classic silent failure here:
+          # the Collector starts fine and nothing can reach it.
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      # Groups spans into fewer, larger export calls. Costs up to `timeout` of
+      # extra delay before telemetry is visible, which is why it is 5s and not
+      # the 200ms default — this is a learning rig, not a latency budget.
+      batch:
+        timeout: 5s
+
+    exporters:
+      # Forward everything to the gateway. Cluster-internal Service DNS, so the
+      # agent does not care which node the gateway landed on — the opposite of
+      # how the app reaches this agent, and for the opposite reason.
+      otlp/gateway:
+        endpoint: otel-gateway.observability.svc.cluster.local:4317
+        tls:
+          insecure: true
+
+      # Kept alongside the forwarder. A pipeline fans out to every exporter it
+      # lists, so the same span goes to both — which is what makes it possible
+      # to see what the agent received *and* what survived the gateway's filter.
+      debug:
+        verbosity: detailed
+
+    service:
+      # The Collector's own metrics — how many spans it took in, sent on, or
+      # failed to send. Without these the pipeline is the one component with no
+      # monitoring, which is the worst possible blind spot: a silently dropping
+      # Collector looks exactly like a service that stopped getting traffic.
+      # 0.0.0.0 for the same reason as the OTLP receiver — the scraper is in a
+      # different pod, so localhost would be unreachable.
+      telemetry:
+        metrics:
+          level: detailed
+          readers:
+            - pull:
+                exporter:
+                  prometheus:
+                    host: 0.0.0.0
+                    port: 8888
+
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [otlp/gateway, debug]
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: otel-agent
+  namespace: observability
+  labels:
+    app: otel-agent
+spec:
+  selector:
+    matchLabels:
+      app: otel-agent
+  template:
+    metadata:
+      labels:
+        app: otel-agent
+    spec:
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:0.158.0
+          args: ["--config=/conf/config.yaml"]
+          ports:
+            # hostPort publishes these on the node's own IP. That is what lets
+            # a pod reach *its own node's* agent without a Service — a Service
+            # would load-balance across nodes, which defeats the point of
+            # running an agent per node.
+            - name: otlp-grpc
+              containerPort: 4317
+              hostPort: 4317
+            - name: otlp-http
+              containerPort: 4318
+              hostPort: 4318
+            # No hostPort: Prometheus reaches this on the pod IP, not the node.
+            - name: metrics
+              containerPort: 8888
+          volumeMounts:
+            - name: config
+              mountPath: /conf
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: config
+          configMap:
+            name: otel-agent

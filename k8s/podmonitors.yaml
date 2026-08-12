@@ -1,0 +1,36 @@
+# Tell Prometheus to scrape the Collectors' own metrics.
+#
+# PodMonitor rather than ServiceMonitor because the agent is a DaemonSet with no
+# Service in front of it — and putting one there would be wrong for the same
+# reason it was wrong for OTLP: a Service load-balances, and "which agent am I
+# scraping" needs to be a specific answer, not a random one.
+#
+# These are picked up because monitoring.yaml sets
+# podMonitorSelectorNilUsesHelmValues: false. Without that, Prometheus ignores
+# any PodMonitor lacking the chart's own release label and the symptom is a
+# panel that is simply empty, with nothing in any log explaining why.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: otel-agent
+  namespace: observability
+spec:
+  selector:
+    matchLabels:
+      app: otel-agent
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 15s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: otel-gateway
+  namespace: observability
+spec:
+  selector:
+    matchLabels:
+      app: otel-gateway
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 15s

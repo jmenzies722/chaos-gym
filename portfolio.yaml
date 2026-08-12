@@ -1,0 +1,122 @@
+# Evidence captured while building, so the portfolio entry is made of measured
+# facts instead of remembered ones. Claude appends to `phases` and `evidence`.
+#
+# Claude does not write narrative here. Why anything was chosen lives in
+# DECISIONS.md, in Josh's words — a portfolio page whose reasoning was written
+# by the assistant is a page about the assistant. Every `evidence` item must
+# name the command that produced it, or it does not belong in this file.
+
+slug: chaos-gym
+name: Chaos Gym
+repo: https://github.com/jmenzies722/chaos-gym
+
+# Mirrors shua-labs' honesty rule: `public` is a claim about the repo, not an
+# aspiration. This flips only on graduation under the learning contract —
+# public repo, README with architecture diagram, working demo, one written post
+# per phase. Until then this project does not render in the site's Shipped
+# section, because the section filters on exactly this field.
+availability: private
+
+summary: >-
+  A Kubernetes cluster that breaks itself on a schedule, so incident diagnosis
+  can be practised against real dashboards rather than read about.
+
+stack: [Go, Python, Terraform, AWS, k3s, OpenTelemetry, Prometheus, Grafana]
+
+phases:
+  - id: 1
+    name: Go service, OTel pipeline, one failure mode
+    status: in-progress
+    steps_done: 8
+    steps_total: 9
+
+evidence:
+  - claim: >-
+      Instance size was chosen by measurement, not guesswork. t3.micro burned
+      its CPU credit balance to zero during the k3s install and throttled hard
+      enough that SSM commands queued instead of running; k3s idles at ~760MB,
+      leaving too little headroom on t3.small's 2GiB for kube-prometheus-stack.
+    how: CloudWatch CPUCreditBalance during install; free -m on the node
+    phase: 1
+
+  - claim: >-
+      The cluster has zero inbound security-group rules. Access is SSM Session
+      Manager, authorised by IAM rather than by network position — no port 22,
+      no bastion, nothing on the internet can open a connection to the box.
+    how: aws ec2 describe-security-groups; aws ssm start-session --target i-02d3195a106ce38fd
+    phase: 1
+
+  - claim: >-
+      Cost guardrails exist before any billable resource does. A $20/month
+      budget alarm with include_credit = false, so promotional credits cannot
+      mask real spend, plus a budget action that stops (never terminates) the
+      instance at 100% of actual, scoped to a single instance ARN.
+    how: terraform/main.tf, terraform/budget_action.tf; applied 2026-08-11
+    phase: 1
+
+  - claim: >-
+      The Go service ships as a 2.5MB scratch image — static binary, no base
+      OS, cross-built linux/amd64 from an arm64 Mac.
+    how: docker images chaos-gym-app; app/Dockerfile
+    phase: 1
+
+  - claim: >-
+      Two replicas behind a ClusterIP Service load-balanced 16/14 across 30
+      requests, verified by the pod hostname each response returns — which is
+      also what makes a pod kill visible from outside the cluster.
+    how: 30x curl chaos-app/work, counting distinct "pod" values
+    phase: 1
+
+  - claim: >-
+      A RED dashboard (request rate, error rate, duration) exists without any
+      metrics SDK in the service. The service emits only traces; the Collector
+      gateway's spanmetrics connector derives the metrics and pushes them into
+      Prometheus over OTLP rather than being scraped.
+    how: >-
+      PromQL traces_span_metrics_calls_total returned 25 after 25 requests,
+      labelled service_name=chaos-app, span_name="GET /work", status 200
+    phase: 1
+
+  - claim: >-
+      Dropping health-probe spans at the cluster-wide gateway rather than at
+      each node's agent removed 84% of span volume in one place. Liveness and
+      readiness probes outnumbered real requests roughly five to one at idle.
+    how: 'span-name counts either side of the filter: agent 16 /healthz + 3 /work, gateway 3 /work'
+    phase: 1
+
+  - claim: >-
+      A histogram bucket boundary placed on a service's typical latency makes a
+      healthy service look slow. With a boundary at 100ms and requests taking
+      101ms, p95 read 242ms; moving the boundaries either side of the mode gave
+      p50 100ms and p95 109ms for the same unchanged service.
+    how: histogram_quantile over traces_span_metrics_duration_milliseconds_bucket, before and after
+    phase: 1
+
+  - claim: >-
+      The chaos scheduler's blast radius is enforced by RBAC, not by convention.
+      Its ServiceAccount lives in one namespace and its Role in another, and it
+      cannot scale the deployment, edit the image, or touch the monitoring
+      namespace that observes the incidents it causes.
+    how: >-
+      kubectl auth can-i --as=system:serviceaccount:chaos:chaos-scheduler —
+      delete pods in default yes; delete deployments no; delete pods in
+      observability no; create pods no
+    phase: 1
+
+  - claim: >-
+      The telemetry pipeline monitors itself. Both Collectors expose their own
+      metrics and are scraped via PodMonitor, so spans accepted, spans sent,
+      refusals and queue depth are visible — a silently dropping Collector is
+      otherwise indistinguishable from a service that stopped receiving traffic.
+    how: 'PromQL over otelcol_receiver_accepted_spans / otelcol_exporter_sent_spans: 3/s in, 3.8/s out, 0 refused'
+    phase: 1
+
+  - claim: >-
+      Distributed tracing works across a process boundary: an inbound W3C
+      traceparent header makes the service adopt the caller's trace ID and
+      record the caller's span as a remote parent, rather than starting a new
+      trace.
+    how: >-
+      curl -H 'traceparent: 00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01'
+      localhost:8080/work — emitted span shows Parent.Remote true and the same TraceID
+    phase: 1

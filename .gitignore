@@ -20,3 +20,9 @@ __pycache__/
 terraform.tfvars
 
 CLAUDE.local.md
+
+# Raw capture from the Stop hook: every command run and its real output. It is
+# redacted for credential patterns, but "redacted by regex" is not a guarantee,
+# so the raw log never leaves this machine. portfolio.yaml — the distilled,
+# reviewed version — is what gets committed and published.
+.portfolio/sessions/

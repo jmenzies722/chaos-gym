@@ -19,7 +19,7 @@ func TestHealthzReturnsOK(t *testing.T) {
 
 func TestWorkReturnsPodName(t *testing.T) {
 	rec := httptest.NewRecorder()
-	handleWork(time.Millisecond)(rec, httptest.NewRequest(http.MethodGet, "/work", nil))
+	handleWork(time.Millisecond, newFaultStore())(rec, httptest.NewRequest(http.MethodGet, "/work", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got status %d, want %d", rec.Code, http.StatusOK)
@@ -38,7 +38,7 @@ func TestWorkReturnsPodName(t *testing.T) {
 // the routing rather than handleWork directly.
 func TestWorkRejectsPost(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /work", handleWork(time.Millisecond))
+	mux.HandleFunc("GET /work", handleWork(time.Millisecond, newFaultStore()))
 
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/work", nil))

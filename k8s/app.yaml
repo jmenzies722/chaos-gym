@@ -26,13 +26,19 @@ spec:
         - name: ecr-creds
       containers:
         - name: app
-          image: 755484097925.dkr.ecr.us-east-1.amazonaws.com/chaos-gym-app:v2
+          image: 755484097925.dkr.ecr.us-east-1.amazonaws.com/chaos-gym-app:v3
           ports:
             - name: http
               containerPort: 8080
           env:
             - name: WORK_DURATION
               value: "100ms"
+            # Fault injection is off in the binary by default — an endpoint that
+            # slows your own service is a DoS switch. Enabling it is an explicit
+            # decision recorded here, for a cluster with no inbound ports whose
+            # entire purpose is breaking on command.
+            - name: CHAOS_API_ENABLED
+              value: "true"
             # The downward API: Kubernetes injects facts about the pod's own
             # placement that the image cannot know at build time. The Collector
             # agent is a DaemonSet on this node's IP, and which node this pod

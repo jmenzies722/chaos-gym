@@ -30,6 +30,12 @@ phases:
     steps_done: 8
     steps_total: 9
 
+  - id: 2
+    name: Failure-mode menu, each ending in an incident writeup
+    status: in-progress
+    steps_done: 1
+    steps_total: 5
+
 evidence:
   - claim: >-
       Instance size was chosen by measurement, not guesswork. t3.micro burned
@@ -110,6 +116,24 @@ evidence:
       otherwise indistinguishable from a service that stopped receiving traffic.
     how: 'PromQL over otelcol_receiver_accepted_spans / otelcol_exporter_sent_spans: 3/s in, 3.8/s out, 0 refused'
     phase: 1
+
+  - claim: >-
+      Injected latency into one replica at runtime and captured the signature of
+      a degradation that every health check misses: p50 unchanged at 101ms while
+      p95 and p99 went from 109ms to 2000ms, with zero errors, zero restarts and
+      full replica count. Kubernetes considered the service healthy throughout,
+      because the liveness probe hits an endpoint the fault does not touch.
+    how: >-
+      POST /chaos/latency?fraction=0.3&delay=2s, then histogram_quantile over
+      traces_span_metrics_duration_milliseconds_bucket before and after
+    phase: 2
+
+  - claim: >-
+      Fault state is swapped through an atomic pointer to an immutable struct
+      because HTTP handlers read it concurrently with the injection endpoint
+      writing it — a genuine data race, not a theoretical one.
+    how: go test -race ./... with a test that reads from 50 goroutines while 10 write
+    phase: 2
 
   - claim: >-
       Distributed tracing works across a process boundary: an inbound W3C

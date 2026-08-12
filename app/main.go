@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"os/signal"
@@ -30,9 +31,20 @@ func main() {
 		log.Fatalf("tracing setup: %v", err)
 	}
 
+	faults := newFaultStore()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
-	mux.HandleFunc("GET /work", handleWork(workDuration))
+	mux.HandleFunc("GET /work", handleWork(workDuration, faults))
+
+	// Fault injection is off unless explicitly switched on. An endpoint that
+	// makes your own service slow is a denial-of-service switch, and it should
+	// never be reachable by default just because the binary supports it. The
+	// manifest enables it for this cluster deliberately.
+	if envOr("CHAOS_API_ENABLED", "") == "true" {
+		mux.HandleFunc("/chaos/latency", handleChaosLatency(faults))
+		log.Print("chaos API enabled at /chaos/latency")
+	}
 
 	// One span per inbound request, created before routing happens. The name
 	// formatter uses the path because r.Pattern is not populated yet out here;
@@ -96,10 +108,15 @@ func handleHealthz(w http.ResponseWriter, r *http.Request) {
 // handleWork simulates a unit of real work. The delay exists so there is
 // latency worth measuring once OpenTelemetry goes in, and so a pod kill has a
 // realistic chance of landing mid-request.
-func handleWork(d time.Duration) http.HandlerFunc {
+func handleWork(d time.Duration, faults *faultStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		delay := d
+		if f := faults.get(); f.Fraction > 0 && rand.Float64() < f.Fraction {
+			delay += f.Delay
+		}
+
 		select {
-		case <-time.After(d):
+		case <-time.After(delay):
 		case <-r.Context().Done():
 			// Client hung up. Nothing to write to.
 			return

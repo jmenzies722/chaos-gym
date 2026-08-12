@@ -188,7 +188,38 @@ exists because the step after it needs it.
    to 100ms and p95 to 109ms. A quantile is only as accurate as the bucket it
    lands in, and a boundary on the mode is the worst place for one.
 
-Phase 2 (not yet scoped in detail): Postgres/Redis behind the Go service, load
+**Phase 2, failure mode 1 — latency injection. Done.** `app/fault.go` plus
+`POST /chaos/latency?fraction=0.3&delay=2s`. Runtime toggle, not an env var: an
+env change rolls the pods, and a rollout is a *different* failure with a
+different signature. Injecting at runtime leaves the pods untouched so the only
+variable is response time. Gated behind `CHAOS_API_ENABLED`, off by default,
+because an endpoint that slows your own service is a DoS switch.
+
+The fault store is an `atomic.Pointer` to an immutable struct — handlers run one
+goroutine per request and read it while the chaos endpoint writes it, which is a
+real data race that `go test -race` catches.
+
+Measured signature, and the reason this failure mode is worth more than a pod
+kill: p50 **100ms → 101ms**, p95 **109ms → 2000ms**, p99 the same, errors **0**,
+replicas **2**, restarts **0**. Kubernetes considers the service perfectly
+healthy — `/healthz` is unaffected, so no probe fails and nothing restarts. Only
+the tail moved. Throughput also fell 0.90 → 0.74 req/s, because a closed-loop
+client blocked on slow responses issues fewer of them.
+
+Two things learned by accident, both kept:
+- **The fault lands on one pod only.** The POST goes through the Service, which
+  load-balances it to a single replica; in-memory state is per-pod. That is the
+  most realistic degradation there is — one bad replica, not a uniformly slow
+  service — so it was left that way. To hit every pod, address pod IPs directly.
+- **The fault dies with the pod.** The chaos scheduler kills a pod every 10
+  minutes, and in-memory state goes with it, so an injected fault silently
+  self-heals. Real fault injection needs state that outlives the process if it
+  is meant to persist.
+- **A client with no timeout hangs for ~130s** when its pod disappears mid-
+  connection: Linux TCP SYN retransmit. Seen for real during the v3 rollout —
+  one bare `curl` took 129s. `loadgen` is immune because it sets `--max-time 5`.
+
+Phase 2 (rest, not yet scoped in detail): Postgres/Redis behind the Go service, load
 testing, and the rest of the failure-mode menu (latency injection, bad rollout,
 DB slowdown, telemetry overload), ending in a written incident report.
 

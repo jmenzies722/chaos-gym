@@ -1,0 +1,73 @@
+# The image reference is account-specific. `terraform output ecr_repository_url`
+# prints the right value for your account if you are running this yourself.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chaos-app
+  labels:
+    app: chaos-app
+spec:
+  # Two replicas so killing one is survivable. With a single replica every
+  # chaos event is a total outage, which is a much less interesting signal
+  # than watching traffic shift to the surviving pod.
+  replicas: 2
+  selector:
+    matchLabels:
+      app: chaos-app
+  template:
+    metadata:
+      labels:
+        app: chaos-app
+    spec:
+      # Kubernetes' default is 30s. The Go server drains for at most 10s, so
+      # this leaves headroom for the drain to finish before SIGKILL.
+      terminationGracePeriodSeconds: 20
+      imagePullSecrets:
+        - name: ecr-creds
+      containers:
+        - name: app
+          image: 755484097925.dkr.ecr.us-east-1.amazonaws.com/chaos-gym-app:v1
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: WORK_DURATION
+              value: "100ms"
+          # Readiness gates traffic; liveness restarts the container. They hit
+          # the same endpoint here but mean different things, and conflating
+          # them is how a slow-starting app gets restart-looped forever.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 1
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chaos-app
+spec:
+  selector:
+    app: chaos-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

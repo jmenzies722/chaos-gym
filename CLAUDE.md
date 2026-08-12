@@ -42,15 +42,17 @@ command, because it gets run.
 
 - `src/chaos_gym/` — the Python chaos scheduler (the thing doing the killing) and
   anything using the Kubernetes Python client. Empty stub right now.
-- `app/` — not created yet. The Go HTTP service that gets broken on purpose,
-  instrumented with OpenTelemetry.
+- `app/` — the Go HTTP service that gets broken on purpose. `main.go`,
+  `main_test.go`, and a two-stage `Dockerfile` (build on `golang`, run on
+  `scratch`). OpenTelemetry instrumentation not added yet.
 - `terraform/` — not created yet. First resource in here, before anything else:
   the AWS Budget alarm. Then the EC2 instance, its VPC/subnet/security group, and
   its IAM instance role. Local state — this project never needs multi-person state
   locking.
-- `k8s/` — not created yet. Manifests for the Go service, the OTel Collector
-  (agent+gateway), and `kube-prometheus-stack`, applied to the k3s cluster running
-  on the EC2 box.
+- `k8s/` — `app.yaml` (Deployment + Service for the Go app). Manifests for the
+  OTel Collector (agent+gateway) and `kube-prometheus-stack` still to come.
+  Applied to the k3s cluster on the EC2 box by copying to `/opt/chaos-gym/`
+  over SSM, since the cluster has no inbound port open.
 
 ## Architecture
 
@@ -77,7 +79,14 @@ exists because the step after it needs it.
    instance ARN so the other project on this account is out of the blast
    radius. **Stop the instance between sessions:** `aws ec2 stop-instances
    --instance-ids i-02d3195a106ce38fd` (~$1.60/mo stopped, ~$35/mo running).
-4. Go HTTP service — minimal, containerized, deployable.
+4. Go HTTP service — minimal, containerized, deployable. **Done:** `/healthz`
+   and `/work` (returns hostname = pod name, which is what makes a pod kill
+   visible from outside). Handles SIGTERM and drains via `srv.Shutdown`.
+   Image is `scratch` + static binary, 2.5MB, cross-built `linux/amd64` from
+   the arm64 Mac. Pushed to ECR, deployed to k3s as 2 replicas, load
+   balancing verified 16/14 across 30 requests.
+   **ECR pull secret expires every 12h** — re-run `/opt/chaos-gym/deploy.sh`
+   on the instance at the start of a session to refresh it.
 5. OpenTelemetry SDK instrumentation in the Go service — traces and metrics.
 6. k8s manifests: deploy the Go service and the OTel Collector (agent) to k3s.
 7. OTel Collector gateway config + `kube-prometheus-stack` (OTLP receiver +

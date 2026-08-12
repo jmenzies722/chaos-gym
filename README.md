@@ -85,6 +85,71 @@ error rate, and duration — the RED method — and pushes them to Prometheus ov
 OTLP. There is a complete latency dashboard without a single metrics SDK call
 in the service.
 
+### How code gets there
+
+```mermaid
+flowchart LR
+  src["Go source<br/>arm64 Mac"] -->|"CGO_ENABLED=0<br/>GOOS=linux GOARCH=amd64"| bin["static binary"]
+  bin --> img["scratch image<br/>2.5 MB"]
+  img -->|"buildx --push"| ecr[("ECR")]
+  dep["deploy.sh"] -->|"renders __ECR_REGISTRY__<br/>then kubectl apply"| k3s["k3s"]
+  ecr -->|"pull secret<br/>expires every 12h"| k3s
+```
+
+The image is built on an arm64 Mac for `linux/amd64`, and `CGO_ENABLED=0`
+produces a binary with no libc dependency — which is what makes the runtime
+stage `scratch`, an image with no shell, no package manager, and no CA bundle.
+That's 2.5MB and almost nothing to pivot to if someone gets execution. The
+trade is that `kubectl exec` into it gets you nothing, so debugging has to
+happen through telemetry. That constraint is deliberate, and it has already
+bitten once: confirming an environment variable had resolved was impossible
+from inside the container, and the Collector log was the only way to tell.
+
+Deployment goes the long way round because the cluster has no inbound port.
+`deploy.sh` is copied to the instance and run there over SSM. It mints a fresh
+ECR pull secret — the token expires every 12 hours, so this is the one step you
+cannot skip at the start of a session — substitutes the registry placeholder,
+and applies every manifest.
+
+### What the scheduler actually does
+
+It kills one pod and exits. It does not loop, and the CronJob owns the schedule,
+because a Python process that sleeps between kills is a second thing that has to
+stay alive — and when it dies quietly the chaos simply stops with nobody
+noticing. Kubernetes already does scheduling, with retries and run history.
+
+Its safety is structural rather than careful:
+
+- It refuses to kill if that would leave fewer than one running pod, and **exits
+  0 when it refuses**, because a non-zero exit would make the CronJob retry a
+  safety rule that is working correctly.
+- `backoffLimit: 0`, for the same reason one layer up — retrying a kill does not
+  repeat the action, it kills a *second* pod.
+- `concurrencyPolicy: Forbid`, so two runs can never overlap and take out both
+  replicas at once.
+- Pods that are Pending or already Terminating count as neither candidates nor
+  survivors, since they are not carrying traffic.
+
+### Everything is a file, including the dashboard
+
+The Grafana dashboard is a ConfigMap labelled `grafana_dashboard: "1"`, which a
+sidecar watches and loads. It lives in `k8s/dashboard.yaml` rather than in
+Grafana's own database, because that database is an `emptyDir` on a cluster
+whose entire purpose is killing pods. A dashboard built by clicking in the UI
+would not survive its first restart.
+
+The service also exposes a fault-injection API for deliberate degradation:
+
+```bash
+# slow 30% of requests by 2 seconds — no restart, no rollout, no pod events
+curl -X POST "http://chaos-app/chaos/latency?fraction=0.3&delay=2s"
+curl -X POST "http://chaos-app/chaos/latency?fraction=0"   # clear
+```
+
+It is gated behind `CHAOS_API_ENABLED` and off by default, because an endpoint
+that slows your own service is a denial-of-service switch and should never be
+reachable just because the binary supports it.
+
 ---
 
 ## Three things it caught

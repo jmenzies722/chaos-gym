@@ -3,7 +3,7 @@ name = "chaos-gym"
 version = "0.1.0"
 description = "Breaks a local Kubernetes cluster on a schedule so you can practice diagnosing real failures against real dashboards."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["kubernetes>=31"]
 
 [build-system]
 requires = ["setuptools>=68"]

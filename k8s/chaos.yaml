@@ -1,0 +1,99 @@
+# The chaos scheduler, and the RBAC that decides what it is allowed to break.
+#
+# It runs in its own namespace and is granted rights in `default` from there.
+# That split is the point: it makes the blast radius visible in the manifest
+# rather than implied. Nothing here lets it touch the `observability`
+# namespace, so it cannot kill the Collector or Prometheus that are meant to be
+# watching the incident it causes.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chaos
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: chaos-scheduler
+  namespace: chaos
+---
+# A Role is namespaced, and it lives in the namespace being ACCESSED — `default`,
+# where the app runs — not in the namespace of the thing doing the accessing.
+# This is the part people get backwards.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pod-killer
+  namespace: default
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    # list to find candidates, delete to kill one. No `create`, no `patch`, no
+    # access to deployments — it cannot scale the app to zero or edit the image,
+    # only remove a pod the ReplicaSet will immediately replace.
+    verbs: ["list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: chaos-scheduler-pod-killer
+  namespace: default
+subjects:
+  # The subject is in a different namespace from the binding. That is legal and
+  # deliberate — the binding grants access *into* default, and stating the
+  # subject's namespace explicitly is what makes the grant auditable.
+  - kind: ServiceAccount
+    name: chaos-scheduler
+    namespace: chaos
+roleRef:
+  kind: Role
+  name: pod-killer
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: chaos-scheduler
+  namespace: chaos
+spec:
+  # Every 10 minutes. Frequent enough to catch during a session, far enough
+  # apart that the recovery is fully visible on a dashboard before the next one.
+  schedule: "*/10 * * * *"
+  # Never run two kills at once — overlapping runs could take out both replicas
+  # and turn a recoverable blip into an outage.
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # One attempt. A retry would kill a second pod, which is not "retrying"
+      # the same action — it is doing more damage than intended.
+      backoffLimit: 0
+      template:
+        spec:
+          serviceAccountName: chaos-scheduler
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: ecr-creds
+          containers:
+            - name: scheduler
+              image: 755484097925.dkr.ecr.us-east-1.amazonaws.com/chaos-gym-scheduler:v1
+              env:
+                - name: CHAOS_NAMESPACE
+                  value: default
+                - name: CHAOS_SELECTOR
+                  value: app=chaos-app
+                # Never take the service fully down. One replica always survives,
+                # so the dashboard shows traffic shifting rather than flatlining.
+                - name: CHAOS_MIN_SURVIVORS
+                  value: "1"
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  memory: 128Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]

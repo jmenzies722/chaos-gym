@@ -67,17 +67,16 @@ exists because the step after it needs it.
    table for outbound internet, security group with zero inbound rules — SSM
    only, no SSH port open.
 3. EC2 instance + IAM instance role (Terraform); k3s installed via user-data.
-   **In progress.** IAM role + instance profile (`AmazonSSMManagedInstanceCore`)
-   applied and working — SSM reached the box with zero inbound ports open. The
-   `t3.micro` first attempt was destroyed 2026-08-11: `CPUCreditBalance` sat at
-   0 through the k3s install, throttling it so hard that SSM commands queued
-   instead of running. `instance_type` is now `t3.small`; re-apply to rebuild.
-   **Stop the instance between sessions** — `t3.small` running 24/7 (~$20/mo)
-   does not fit the $20 budget; stopped it is ~$1.60/mo.
-   Also add an AWS Budget Action on `chaos-gym-monthly`: auto-**stop** (never
-   terminate) this instance if actual spend hits 100%, scoped to this instance
-   only by tag. Stop preserves the EBS volume/work; only possible once the
-   instance exists to target.
+   **Done:** `i-02d3195a106ce38fd`, `t3.medium`, k3s v1.36.3+k3s1, node Ready.
+   Reached over SSM with zero inbound ports open. Sizing was found by
+   measurement, not guesswork: `t3.micro` ran `CPUCreditBalance` to 0 during
+   the k3s install and throttled so hard SSM commands queued instead of
+   executing; k3s idles at ~760MB, so `t3.small`'s 2 GiB would have left too
+   little for `kube-prometheus-stack`. Budget Action also applied — auto-stops
+   (never terminates) this one instance if *actual* spend hits 100%, scoped by
+   instance ARN so the other project on this account is out of the blast
+   radius. **Stop the instance between sessions:** `aws ec2 stop-instances
+   --instance-ids i-02d3195a106ce38fd` (~$1.60/mo stopped, ~$35/mo running).
 4. Go HTTP service — minimal, containerized, deployable.
 5. OpenTelemetry SDK instrumentation in the Go service — traces and metrics.
 6. k8s manifests: deploy the Go service and the OTel Collector (agent) to k3s.

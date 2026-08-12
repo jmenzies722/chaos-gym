@@ -1,3 +1,4 @@
+# python
 .venv/
 __pycache__/
 *.pyc
@@ -5,10 +6,17 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 
+# go
+*.test
+/app/app
+
 # terraform
+# .terraform.lock.hcl is intentionally NOT ignored — it pins provider versions
+# so a `terraform init` months from now resolves the same AWS provider that was
+# actually tested here.
 .terraform/
 *.tfstate
 *.tfstate.backup
-.terraform.lock.hcl
+terraform.tfvars
 
 CLAUDE.local.md

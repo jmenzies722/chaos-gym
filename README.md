@@ -1,25 +1,31 @@
 # Chaos Gym
 
-A Kubernetes cluster that breaks itself on a schedule, so I can practice
-diagnosing real failures against real dashboards.
+[![CI](https://github.com/jmenzies722/chaos-gym/actions/workflows/ci.yml/badge.svg)](https://github.com/jmenzies722/chaos-gym/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Reading a postmortem teaches you what an outage looked like to someone else.
-This is a rig for having the experience yourself: a Go service instrumented with
-OpenTelemetry, its telemetry flowing through an OpenTelemetry Collector into
-Prometheus and Grafana, and a Python scheduler that kills the service on purpose
-while I try to name what broke from the dashboard alone.
+**A Kubernetes cluster that breaks itself on a schedule, so I can practise
+diagnosing real failures from a dashboard instead of reading about them.**
 
-It runs on one small EC2 instance on real AWS — real IAM, real VPC, real
-security groups — because the parts that are easy to skip locally are the parts
-worth practicing.
+Reading a postmortem teaches you what an outage looked like to somebody else.
+This is a rig for having the experience yourself. A Go service runs in a real
+cluster on real AWS. A Python scheduler kills one of its pods every ten
+minutes. Telemetry flows through an OpenTelemetry Collector into Prometheus and
+Grafana, and the exercise is to look at the dashboard and say what happened
+before checking whether I was right.
 
-## Architecture
+The infrastructure is the setup. **The diagnoses are the point** — there are
+three real ones further down, including one where the dashboard itself was
+lying.
+
+---
+
+## How it works
 
 ```mermaid
 flowchart LR
-  laptop["Laptop<br/>aws ssm start-session"]
+  laptop["Laptop<br/>SSM port-forward"]
 
-  subgraph ec2["EC2 t3.medium · k3s · no inbound ports"]
+  subgraph ec2["EC2 t3.medium · k3s · zero inbound ports"]
     direction LR
 
     subgraph ns_default["namespace: default"]
@@ -32,206 +38,273 @@ flowchart LR
     end
 
     subgraph ns_obs["namespace: observability"]
-      agent["Collector agent<br/>DaemonSet · hostPort 4317"]
-      gw["Collector gateway<br/>Deployment · Service"]
-      prom[("Prometheus<br/>OTLP receiver")]
-      graf["Grafana<br/>NodePort 30300"]
+      agent["Collector agent<br/>DaemonSet"]
+      gw["Collector gateway<br/>Deployment"]
+      prom[("Prometheus")]
+      graf["Grafana"]
     end
   end
 
   load -->|HTTP| app
   app -->|"OTLP spans<br/>via node IP"| agent
   agent -->|"OTLP<br/>Service DNS"| gw
-  gw -->|"spans → metrics<br/>spanmetrics connector"| prom
+  gw -->|"spans → metrics"| prom
   prom --> graf
-  graf -.->|"port-forward<br/>over SSM"| laptop
-  chaos -->|"delete pod<br/>RBAC: list+delete only"| app
+  graf -.->|"IAM-authorised tunnel"| laptop
+  chaos -->|"delete pod"| app
 ```
 
-Three things in that picture are the whole design.
+Follow one request through it. The load generator calls `/work`. The Go
+service handles it and OpenTelemetry records a **span** — a timed record of
+that one request. The span goes to the **agent**, a Collector running on the
+same node, which acts as a local drop-box so the service never waits on a
+backend. The agent forwards to the **gateway**, one Collector for the whole
+cluster, where cluster-wide decisions live: it drops health-probe spans and
+converts the rest into metrics. Those go to **Prometheus**, and **Grafana**
+draws them.
 
-**The Collector sits in the middle** rather than the service writing straight to
-Prometheus, because it's the vendor-neutral seam. Swapping the backend is a
-Collector config change, not a code change in every service.
+Meanwhile the chaos scheduler deletes a pod. The service loses a replica,
+Kubernetes replaces it, and the dashboard has to show whether anyone was hurt.
 
-**Agent and gateway are reached differently, on purpose.** The app finds its
-agent via the node's IP from the downward API, because a DaemonSet is one pod
-per node and a Service would load-balance across nodes — the opposite of what a
-node-local agent is for. The agent finds the gateway via ordinary Service DNS,
-because there the load-balancing is exactly right.
+### Three design decisions that shape everything
 
-**Metrics are derived, not instrumented.** The Go service emits only traces. The
-gateway's `spanmetrics` connector turns those spans into request rate, error
-rate, and duration, and pushes them into Prometheus over OTLP. There is a
-working RED dashboard before a single metrics SDK call exists in the service.
+**The Collector sits in the middle** instead of the service writing straight to
+Prometheus. That's the vendor-neutral seam: swapping the backend becomes a
+Collector config change rather than a code change in every service.
 
-**k3s rather than managed EKS.** EKS charges ~$73/month for its control plane,
-which buys high availability that solo practice does not need. k3s on one
-instance gives the same Kubernetes API for the price of the box.
+**The agent and the gateway are reached in opposite ways, deliberately.** The
+app finds its agent through the node's IP, injected by Kubernetes' downward
+API — because a DaemonSet is one pod *per node*, and a Service would
+load-balance across nodes, sending spans to some other machine's agent. The
+agent finds the gateway through ordinary Service DNS, because there
+load-balancing is exactly what you want. Same protocol, opposite requirement.
 
-**Access is via SSM Session Manager, not SSH.** The security group has zero
-inbound rules — no port 22, nothing. The instance's SSM agent dials out, and
-access is authorized by IAM rather than by knowing an IP. Nothing on the
-internet can open a connection to this box.
+**Metrics are derived, not instrumented.** The Go service emits only traces.
+The gateway's `spanmetrics` connector turns those spans into request rate,
+error rate, and duration — the RED method — and pushes them to Prometheus over
+OTLP. There is a complete latency dashboard without a single metrics SDK call
+in the service.
 
-## Status
+---
 
-Phase 1, partly built. Honest state:
+## Three things it caught
 
-| Step | What | Status |
-|------|------|--------|
-| 1 | AWS Budget alarm | Done |
-| 2 | VPC, subnet, security group | Done |
-| 3 | EC2 instance, IAM role, k3s, budget auto-stop | Done |
-| 4 | Go HTTP service | Done — 2.5MB `scratch` image, 2 replicas on k3s |
-| 5 | OpenTelemetry instrumentation | Traces done; metrics not started |
-| 6 | k8s manifests for service + Collector agent | Done — spans reaching the agent |
-| 7 | Collector gateway + kube-prometheus-stack | Done — span metrics in Prometheus, Grafana up |
-| 8 | Python chaos scheduler | Done — CronJob, least-privilege RBAC, verified kill |
-| 9 | End to end: read the dashboard, name the failure | Ready — dashboard live, runbook below |
+These are the reason the rig exists.
 
-Phase 2, once phase 1 works end to end: Postgres and Redis behind the service,
-load testing, and a wider failure menu — latency injection, bad rollouts,
-database slowdown, telemetry overload — each ending in a written incident
-report.
+### 1. The dashboard was lying about latency
 
-## Cost, and the guardrails
+p95 read **242ms** for a service that takes 100ms and was completely healthy.
 
-The whole thing runs on one `t3.medium`, which is ~$35/month if left on and
-~$1.60/month stopped. Two guardrails exist because a learning project should
-not be able to surprise you with a bill:
+Prometheus doesn't store every request's duration. It stores counts per
+**bucket** — how many finished under 50ms, under 100ms, under 250ms — and a
+percentile is interpolated *inside* whichever bucket it lands in. A bucket
+boundary sat at exactly 100ms, the service's own typical latency, so every
+normal request fell into the 100→250ms bucket and the maths guessed 242ms.
 
-An **AWS Budget alarm** at $20/month emails at 80% of actual spend and 100% of
-forecasted spend. It is deliberately configured with `include_credit = false`,
-so promotional credits do not mask real usage — otherwise the alarm stays
-silent for as long as the credits last and then a full-price bill arrives with
-no warning.
+Moving the boundaries either side of the mode, changing nothing else:
+p50 **100ms**, p95 **109ms**.
 
-A **budget action** automatically stops the instance if actual spend reaches
-100% of the budget. It stops rather than terminates, so the disk and everything
-on it survive, and its IAM policy is scoped to one instance ARN so it cannot
-touch anything else in the account.
+> A quantile is only as precise as the bucket it falls into, and a boundary
+> sitting on your typical latency is the worst possible place for one.
 
-Instance sizing was settled by measurement, not guesswork. A `t3.micro` ran its
-CPU credit balance to zero during the k3s install and throttled so hard that
-remote commands queued instead of executing. k3s alone idles at ~760MB, so
-`t3.small`'s 2GB would not have left room for Prometheus, Grafana, and the
-Collector.
+### 2. Grafana was being killed and its logs said nothing
+
+It died roughly every thirty minutes, never at startup. Exit code **137** —
+that's `128 + 9`, so SIGKILL. Not Kubernetes asking politely: the kernel
+enforcing a cgroup memory limit, with no grace period and no chance to log.
+
+The tell was the previous container's log ending mid-sentence with no error at
+all. Grafana builds in-memory search indexes *after* boot, so its steady state
+is well above what it needs to come up, and the memory limit had been sized
+against startup.
+
+> A log that ends with an error means the process crashed.
+> A log that just stops means something killed it.
+
+### 3. A traffic drop that was not a traffic drop
+
+Request rate fell, and the obvious reading was that traffic had stopped.
+
+The pipeline-throughput panel dipped at exactly the same instant. The
+Collectors had been restarted — the requests were served perfectly, but their
+*spans* were lost in flight.
+
+This is why the dashboard monitors its own pipeline and shows a **data age**
+panel. A monitoring system that can't report its own liveness produces silence
+you cannot interpret, and a frozen dashboard is indistinguishable from a calm
+one.
+
+> Any monitoring system must report its own liveness, or its silence means
+> nothing. It's why a smoke detector chirps when the battery dies.
+
+### Bonus: the failure every health check misses
+
+Injecting 2s of latency into one replica produces this:
+
+| | Healthy | Degraded |
+|---|---|---|
+| p50 latency | 100ms | **101ms** |
+| p95 latency | 109ms | **2000ms** |
+| Errors | 0 | **0** |
+| Replicas | 2 | **2** |
+| Restarts | 0 | **0** |
+
+Nothing restarted. No probe failed. Kubernetes considered the service perfectly
+healthy the entire time, because the liveness probe hits an endpoint the fault
+doesn't touch. Only the tail moved — which is the entire argument for
+percentiles over averages, and for alerting on tail latency rather than on pod
+restarts.
+
+---
+
+## Security and cost, because a learning project shouldn't bite
+
+**Zero inbound rules.** The security group opens nothing — no port 22, no
+bastion, no load balancer. The instance's SSM agent dials *out*, and access is
+authorised by IAM rather than by knowing an IP. Grafana is reached by
+port-forwarding through that outbound tunnel.
+
+**The chaos scheduler's blast radius is RBAC, not good intentions.** Its
+ServiceAccount lives in one namespace and its Role in another, granting `list`
+and `delete` on pods and nothing else. Verified rather than assumed:
+
+```
+delete pods -n default             yes
+delete deployments -n default      no
+delete pods -n observability       no    ← cannot kill what is watching it
+create pods -n default             no
+```
+
+**A budget alarm exists before anything billable does.** $20/month, alerting at
+80% of actual and 100% of forecast, configured with `include_credit = false` so
+promotional credits can't mask real spend. A budget action stops — never
+terminates — the instance at 100%, with an IAM policy scoped to one instance
+ARN so it cannot touch anything else in the account.
+
+**No account identifiers are committed.** Manifests carry an `__ECR_REGISTRY__`
+placeholder that `deploy.sh` renders from whoever is running it, so this repo
+works against your account without editing any YAML.
+
+The whole thing is one `t3.medium`: about **$35/month** running, **$1.60/month**
+stopped. Sizing was settled by measurement, not guesswork — a `t3.micro` ran its
+CPU credits to zero during the k3s install and throttled so hard that remote
+commands queued instead of executing, and k3s alone idles at ~760MB.
+
+**k3s rather than managed EKS**, because EKS charges ~$73/month for a control
+plane whose high availability solo practice does not need. Same Kubernetes API,
+price of the box.
+
+---
 
 ## Running it yourself
 
-You need Terraform, the AWS CLI with credentials for an account you own, Go 1.26+,
-and Docker.
+You need Terraform, the AWS CLI with credentials for an account you own, Go
+1.26+, Docker, and the [SSM Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)
+(a separate install from the AWS CLI — `aws ssm start-session` fails without it).
 
 ```bash
 cd terraform
-cp terraform.tfvars.example terraform.tfvars   # then put your email in it
+cp terraform.tfvars.example terraform.tfvars   # put your email in it
 terraform init
 terraform plan                                  # read this before applying
 terraform apply
 ```
 
-This creates billable resources — an EC2 instance, mainly. The budget alarm is
-the first resource in the file on purpose, so nothing billable exists before
-something is watching the bill. Read the plan output before you apply it.
+This creates billable resources. The budget alarm is the first resource in the
+file on purpose, so nothing billable exists before something is watching the
+bill.
 
-Connect to the instance without any open port:
-
-```bash
-aws ssm start-session --target <instance-id>
-```
-
-Stop it when you are not using it:
+Run the Go service locally, no cluster required — with no OTLP endpoint set it
+prints spans to stdout:
 
 ```bash
-aws ec2 stop-instances --instance-ids <instance-id>
-```
-
-Run the Go service locally:
-
-```bash
-cd app
-go test ./...
-go run .
+cd app && go test ./... && go run .
 curl localhost:8080/work
 ```
 
-## Using it — one session, start to finish
-
-The instance is stopped between sessions to keep the bill near zero, so every
-session starts by waking it up and ends by putting it back to sleep.
-
-**1. Start the box** (~60s until the k3s API answers):
+## Using it — one session
 
 ```bash
-aws ec2 start-instances --instance-ids <instance-id>
-aws ec2 wait instance-running --instance-ids <instance-id>
-```
+export INSTANCE_ID=$(terraform -chdir=terraform output -raw instance_id)
 
-**2. Redeploy.** This is not optional: the ECR pull secret is built from a token
-that expires after 12 hours, so without this the pods cannot pull their images.
+# 1. Wake it up
+aws ec2 start-instances --instance-ids "$INSTANCE_ID"
+aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
 
-```bash
-aws ssm send-command --instance-ids <instance-id> \
+# 2. Deploy. Not optional — the ECR pull secret is built from a token that
+#    expires every 12 hours, so without this the pods cannot pull images.
+aws ssm send-command --instance-ids "$INSTANCE_ID" \
   --document-name AWS-RunShellScript \
   --parameters 'commands=["bash /opt/chaos-gym/deploy.sh"]'
-```
 
-**3. Open the tunnel.** Leave this running in its own terminal. Nothing is
-exposed to the internet — the security group still has zero inbound rules, and
-this rides the SSM agent's outbound connection, authorised by IAM.
-
-```bash
-aws ssm start-session --target <instance-id> \
+# 3. Tunnel to Grafana. Leave running; nothing is exposed to the internet.
+aws ssm start-session --target "$INSTANCE_ID" \
   --document-name AWS-StartPortForwardingSession \
   --parameters '{"portNumber":["30300"],"localPortNumber":["3000"]}'
 ```
 
-**4. Get the Grafana password** (generated by the chart, never stored in a
-manifest) and log in at http://localhost:3000 as `admin`:
+Grafana is then at http://localhost:3000 as `admin`. The password is generated
+by the chart into a Kubernetes Secret and never written to a manifest:
 
 ```bash
-aws ssm send-command --instance-ids <instance-id> \
+aws ssm send-command --instance-ids "$INSTANCE_ID" \
   --document-name AWS-RunShellScript \
   --parameters 'commands=["k3s kubectl -n observability get secret kube-prometheus-stack-grafana -o jsonpath={.data.admin-password} | base64 -d"]'
 ```
 
-**5. Open the "Chaos Gym — service health" dashboard** and let it sit. A
-load generator sends one request per second, so the graphs are never empty. The
-chaos scheduler fires every 10 minutes on its own; to force one immediately:
+Open **Chaos Gym — service health**. A load generator keeps traffic flowing so
+the graphs are never empty, and the scheduler fires every ten minutes on its
+own. To force an incident immediately:
 
 ```bash
-aws ssm send-command --instance-ids <instance-id> \
+# kill a pod now
+aws ssm send-command --instance-ids "$INSTANCE_ID" \
   --document-name AWS-RunShellScript \
-  --parameters 'commands=["k3s kubectl -n chaos delete job manual-kill --ignore-not-found","k3s kubectl -n chaos create job manual-kill --from=cronjob/chaos-scheduler","sleep 5","k3s kubectl -n chaos logs job/manual-kill"]'
+  --parameters 'commands=["k3s kubectl -n chaos delete job manual-kill --ignore-not-found","k3s kubectl -n chaos create job manual-kill --from=cronjob/chaos-scheduler"]'
 ```
 
-**6. Diagnose it from the dashboard before reading the logs.** That is the whole
-exercise. Name what happened, then check yourself:
+Then read it from the dashboard before checking the logs. That's the exercise:
 
-| What you should see | What it means |
+| What you see | What it means |
 |---|---|
-| **Running replicas** drops 2 → 1, back to 2 | A pod was killed and the ReplicaSet replaced it |
-| **Pod lifecycle** — one line ends, a new one begins | Which pod died, and when |
-| **Latency p95** briefly rises | Requests in flight during the drain |
-| **Non-2xx** stays flat at zero | The SIGTERM handler drained cleanly — no request was dropped |
+| Running replicas dips 2 → 1 → 2 | A pod was killed and replaced |
+| One lifecycle line ends, another begins | Which pod died, and when |
+| p95 rises briefly | Requests caught mid-drain |
+| Non-2xx stays flat at zero | The SIGTERM drain worked — nothing accepted was lost |
 
-If non-2xx is *not* flat, that is the interesting case: something was accepted
-and then lost, which means the drain did not work.
+If non-2xx is *not* flat, that's the interesting case: something was accepted
+and then dropped.
 
-**7. Stop the box** when you are done. The chaos scheduler only fires while it
-is running.
+**Stop the box when you're done.** The scheduler only fires while it's running.
 
 ```bash
-aws ec2 stop-instances --instance-ids <instance-id>
+aws ec2 stop-instances --instance-ids "$INSTANCE_ID"
 ```
+
+---
 
 ## Layout
 
-- `app/` — the Go HTTP service that gets broken on purpose
-- `terraform/` — AWS: budget guardrails, network, instance, IAM, ECR. Local state
-- `src/chaos_gym/` — the Python scheduler that does the killing
-- `k8s/` — every manifest: app, load generator, Collector agent and gateway,
-  monitoring stack, Grafana dashboard, PodMonitors, chaos scheduler and its RBAC
-- `deploy.sh` — applies all of it; run at session start to refresh the ECR token
-- `QUESTIONS.md` — comprehension questions captured while building, reviewed per phase
+| Path | What's in it |
+|---|---|
+| `app/` | The Go service. `main.go`, `telemetry.go` (OTel setup), `fault.go` (runtime latency injection) |
+| `src/chaos_gym/` | The Python scheduler that deletes pods, run as a CronJob |
+| `terraform/` | Budget guardrails, VPC, instance, IAM, ECR. Local state |
+| `k8s/` | Every manifest: app, load generator, Collector agent and gateway, monitoring stack, dashboard, RBAC |
+| `deploy.sh` | Renders and applies all of it; run at session start |
+| `QUESTIONS.md` | Comprehension questions captured while building, reviewed per phase |
+
+## Known limitations
+
+Worth stating plainly rather than being discovered:
+
+- **One node.** The agent-vs-gateway distinction is reasoned correctly but has
+  never been exercised against a second node.
+- **No alerting.** There are dashboards, but nothing pages anyone, so diagnosis
+  only happens when someone is already looking.
+- **Local Terraform state**, which is fine for one operator and wrong for two.
+- **Never load-tested.** Everything here is measured at about 1 request/second.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

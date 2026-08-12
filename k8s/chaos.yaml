@@ -76,7 +76,7 @@ spec:
             - name: ecr-creds
           containers:
             - name: scheduler
-              image: 755484097925.dkr.ecr.us-east-1.amazonaws.com/chaos-gym-scheduler:v1
+              image: __ECR_REGISTRY__/chaos-gym-scheduler:v1
               env:
                 - name: CHAOS_NAMESPACE
                   value: default

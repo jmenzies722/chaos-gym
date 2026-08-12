@@ -1,0 +1,124 @@
+name: CI
+
+# Runs on every push and pull request. The point is not ceremony: this repo
+# claims a Go service, a Python scheduler, and Terraform all work, and a claim
+# nothing verifies is a claim that quietly stops being true.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go — vet, race, build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: app/go.mod
+          cache-dependency-path: app/go.sum
+
+      - name: gofmt (must be clean)
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+
+      - run: go vet ./...
+
+      # -race matters here specifically: the fault store is read by every
+      # request handler while the chaos endpoint writes it. Without the race
+      # detector that bug passes every test and fails in production.
+      - run: go test -race ./...
+
+      # The image is built for linux/amd64 from an arm64 Mac, so prove the
+      # static cross-build still works rather than discovering it at deploy time.
+      - name: Cross-build the release binary
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /dev/null .
+
+  python:
+    name: Python — ruff, pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - run: pip install -e . pytest ruff
+
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: pytest -q
+
+  terraform:
+    name: Terraform — fmt, validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v5
+      - uses: hashicorp/setup-terraform@v3
+
+      - run: terraform fmt -check -recursive
+
+      # -backend=false initialises providers without touching state, so this
+      # needs no AWS credentials and cannot alter anything real.
+      - run: terraform init -backend=false
+      - run: terraform validate
+
+  manifests:
+    name: Kubernetes — schema validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # kubeconform, not `kubectl --dry-run=client`. The kubectl flag sounds
+      # offline but still calls the API server to resolve resource kinds, so it
+      # cannot run without a cluster. kubeconform validates against downloaded
+      # JSON schemas instead. CRDs the cluster installs (HelmChart, PodMonitor)
+      # have no published schema and are skipped rather than failed.
+      - name: Install kubeconform
+        run: |
+          curl -sSL -o /tmp/kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
+          sudo install /tmp/kubeconform /usr/local/bin/
+
+      - name: Validate manifests
+        run: |
+          for f in k8s/*.yaml; do
+            echo "::group::$f"
+            sed 's|__ECR_REGISTRY__|000000000000.dkr.ecr.us-east-1.amazonaws.com|g' "$f" \
+              | kubeconform -strict -ignore-missing-schemas -summary -
+            echo "::endgroup::"
+          done
+
+      # The Grafana dashboard is JSON embedded in a ConfigMap, so YAML validity
+      # says nothing about whether the dashboard itself parses. A broken one
+      # fails silently: the sidecar loads it, Grafana rejects it, and the only
+      # symptom is a dashboard that never appears.
+      - name: Dashboard JSON parses
+        run: |
+          python3 - <<'PY'
+          import json, sys, yaml
+          cm = yaml.safe_load(open("k8s/dashboard.yaml"))
+          body = json.loads(cm["data"]["chaos-gym.json"])
+          panels = body["panels"]
+          print(f"dashboard '{body['title']}' parsed — {len(panels)} panels")
+          missing = [p.get("title", "?") for p in panels if not p.get("targets")]
+          if missing:
+              sys.exit(f"panels with no query: {missing}")
+          PY
+
+  shellcheck:
+    name: Shell — shellcheck deploy.sh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: shellcheck deploy.sh

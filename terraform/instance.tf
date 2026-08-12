@@ -52,3 +52,8 @@ resource "aws_instance" "k3s" {
     Name = "chaos-gym-k3s"
   }
 }
+
+output "instance_id" {
+  description = "Target for aws ssm start-session and aws ec2 stop-instances"
+  value       = aws_instance.k3s.id
+}

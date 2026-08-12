@@ -1,0 +1,5 @@
+# The Go build needs go.mod, go.sum, and *.go. Nothing else belongs in the
+# context — and a smaller context is a faster build as well as a safer one.
+Dockerfile
+.dockerignore
+*.md

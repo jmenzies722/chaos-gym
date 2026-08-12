@@ -1,0 +1,17 @@
+# Build context hygiene: without this the whole repo — .git, .venv, terraform
+# state, the captured session logs — is uploaded to the daemon and can end up
+# in a layer. Terraform state in particular contains resource identifiers that
+# have no business inside a container image.
+.git
+.github
+.venv
+.portfolio
+.pytest_cache
+.ruff_cache
+__pycache__
+*.egg-info
+terraform
+k8s
+app
+docs
+*.md

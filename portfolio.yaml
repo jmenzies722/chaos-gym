@@ -50,7 +50,7 @@ evidence:
       The cluster has zero inbound security-group rules. Access is SSM Session
       Manager, authorised by IAM rather than by network position — no port 22,
       no bastion, nothing on the internet can open a connection to the box.
-    how: aws ec2 describe-security-groups; aws ssm start-session --target i-02d3195a106ce38fd
+    how: aws ec2 describe-security-groups; aws ssm start-session --target <instance-id>
     phase: 1
 
   - claim: >-

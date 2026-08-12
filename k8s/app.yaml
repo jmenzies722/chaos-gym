@@ -1,5 +1,7 @@
-# The image reference is account-specific. `terraform output ecr_repository_url`
-# prints the right value for your account if you are running this yourself.
+# __ECR_REGISTRY__ is substituted by deploy.sh from the caller's own AWS
+# account, so no account id is committed here. Applying this file directly with
+# kubectl will fail on the placeholder — that is deliberate, and the failure is
+# loud rather than a pull error twenty seconds later.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -26,7 +28,7 @@ spec:
         - name: ecr-creds
       containers:
         - name: app
-          image: 755484097925.dkr.ecr.us-east-1.amazonaws.com/chaos-gym-app:v3
+          image: __ECR_REGISTRY__/chaos-gym-app:v3
           ports:
             - name: http
               containerPort: 8080

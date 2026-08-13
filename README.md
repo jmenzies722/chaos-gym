@@ -3,7 +3,7 @@
 [![CI](https://github.com/jmenzies722/chaos-gym/actions/workflows/ci.yml/badge.svg)](https://github.com/jmenzies722/chaos-gym/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**A Kubernetes cluster that breaks itself on a schedule, so I can practise
+**A Kubernetes cluster that breaks itself on a schedule, so I can practice
 diagnosing real failures from a dashboard instead of reading about them.**
 
 Reading a postmortem teaches you what an outage looked like to somebody else.
